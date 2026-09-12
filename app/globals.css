@@ -1,0 +1,4 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "../vendor/shadcn-tailwind-4.13.0.css";
+:root{--background:#f3f7fb;--foreground:#17324d;--card:#fff;--card-foreground:#17324d;--popover:#fff;--popover-foreground:#17324d;--primary:#0e5cab;--primary-foreground:#fff;--secondary:#eaf4fd;--secondary-foreground:#0e5cab;--muted:#eef3f7;--muted-foreground:#6d8296;--accent:#e7f6f1;--accent-foreground:#087a59;--destructive:#d94242;--border:#dce7f1;--input:#d9e4ee;--ring:#3d8bc6;--radius:.75rem;--font-sans:Arial,Helvetica,sans-serif}*{border-color:var(--border)}html,body{margin:0;background:var(--background);color:var(--foreground);font-family:Arial,Helvetica,sans-serif}button{cursor:pointer}button:focus-visible,input:focus-visible{outline:3px solid #0e5cab40;outline-offset:2px}@media(prefers-reduced-motion:no-preference){button{transition:.16s ease}button:active{transform:translateY(1px)}}
