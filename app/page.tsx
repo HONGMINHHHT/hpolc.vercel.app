@@ -32,18 +32,19 @@ async function readPdf(file:File,worker:OcrWorker):Promise<Decision[]>{
  const pdfjs=await import("pdfjs-dist/legacy/build/pdf.mjs");
  pdfjs.GlobalWorkerOptions.workerSrc=new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs",import.meta.url).toString();
  const pdf=await pdfjs.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise;
- let text="";
+ let text="",metadataOcr="";
  for(let i=1;i<=pdf.numPages;i++){
   const page=await pdf.getPage(i),content=await page.getTextContent();
   let pageText=textFromPdfItems(content.items);
-  if(clean(pageText).length<30){
+  const extractedMeta=norm(joinDigits(pageText)),needsFullOcr=clean(pageText).length<30,needsMetadataOcr=i===1&&(!/so\d{1,5}qd/.test(extractedMeta)||!/ngay\d{1,2}thang\d{1,2}nam\d{4}/.test(extractedMeta));
+  if(needsFullOcr||needsMetadataOcr){
    const viewport=page.getViewport({scale:3}),canvas=document.createElement("canvas"),ctx=canvas.getContext("2d");
    canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
-   if(ctx){await page.render({canvas,canvasContext:ctx,viewport}).promise;pageText=(await worker.recognize(canvas)).data.text}
+   if(ctx){await page.render({canvas,canvasContext:ctx,viewport}).promise;const ocrText=(await worker.recognize(canvas)).data.text;if(needsFullOcr)pageText=ocrText;if(i===1)metadataOcr=ocrText}
   }
   text+="\n"+pageText;
  }
- const fallback=fromFilename(file.name),digitsText=joinDigits(text),header=digitsText.split(/C[aă]n\s+c[ứu]/i)[0],headerNorm=norm(header);
+ const fallback=fromFilename(file.name),digitsText=joinDigits(text),metadataText=joinDigits(metadataOcr||digitsText),header=metadataText.split(/C[aă]n\s+c[ứu]/i)[0],headerNorm=norm(header);
  const headerId=firstMatch(header,[/S[ốo]\s*:\s*(\d+\s*\/\s*QĐ\s*[-–]?\s*ĐHV)/i,/S[ốo]\s*:\s*(\d+\s*\/\s*[A-ZĐ0-9-]+)/i]);
  const normalizedId=headerNorm.match(/so(\d{1,5})qd(?:dhv)?/)?.[1]||"";
  const id=fallback.id||headerId.replace(/\s+/g,"")||(normalizedId?`${normalizedId}/QĐ-ĐHV`:"");
@@ -81,7 +82,7 @@ export default function Home(){
    const start=rows.length;
    GROUP_NAMES.forEach((group,groupIndex)=>{
     const count=d.groups[group]||0,graduation=count>0?addMonths(d.date,MONTHS[group]):"";
-    rows.push([groupIndex?"":index+1,"",groupIndex?"":d.major,groupIndex?"":d.station,groupIndex?"":d.className,groupIndex?"":`${d.id}${d.date?` /${d.date}`:""}`,group,count,"",graduation,groupIndex?"":(d.note||"Khớp số tại Điều 1 và danh sách")]);
+    rows.push([groupIndex?"":index+1,"",groupIndex?"":d.major,groupIndex?"":d.station,groupIndex?"":d.className,groupIndex?"":`${d.id}${d.date?` ngày ${d.date}`:""}\n${d.type}\nDanh sách tại trạm: ${d.students??0} SV`,group,count,"",graduation,groupIndex?"":(d.note||"Khớp số tại Điều 1 và danh sách")]);
    });
    for(const c of [0,1,2,3,4,5,10])merges.push({s:{r:start,c},e:{r:start+5,c}});
   });
@@ -97,7 +98,7 @@ export default function Home(){
   XLSX.writeFile(wb,`TONG_HOP_QUAN_LY_DAO_TAO_${label||"KET_QUA"}.xlsx`,{cellDates:true,cellStyles:true});
  }
  return <div className="min-h-screen bg-[#f3f7fb] text-[#17324d]">
-  <header className="sticky top-0 z-30 border-b border-[#dce7f1] bg-white/95"><div className="mx-auto flex h-16 max-w-[1600px] items-center gap-4 px-4 lg:px-7"><div className="flex items-center gap-3"><div className="grid h-10 w-10 place-items-center rounded-xl bg-[#0e5cab] text-white shadow-lg"><GraduationCap size={23}/></div><div><div className="text-lg font-extrabold text-[#103f70]">HPOLC</div><div className="hidden text-xs text-[#70859a] sm:block">Hệ thống quản lý đào tạo · Bản xuất Excel 2.2</div></div></div><label className="ml-auto hidden max-w-md flex-1 items-center rounded-xl border border-[#d9e4ee] bg-[#f7fafd] px-3 md:flex"><Search size={17}/><input value={query} onChange={e=>setQuery(e.target.value)} className="w-full bg-transparent px-2.5 py-2 text-sm outline-none" placeholder="Tìm số quyết định..."/></label><button className="rounded-xl border p-2.5"><Settings size={19}/></button><div className="grid h-9 w-9 place-items-center rounded-full bg-[#e4f0fb] text-sm font-bold text-[#0e5cab]">HP</div></div></header>
+  <header className="sticky top-0 z-30 border-b border-[#dce7f1] bg-white/95"><div className="mx-auto flex h-16 max-w-[1600px] items-center gap-4 px-4 lg:px-7"><div className="flex items-center gap-3"><div className="grid h-10 w-10 place-items-center rounded-xl bg-[#0e5cab] text-white shadow-lg"><GraduationCap size={23}/></div><div><div className="text-lg font-extrabold text-[#103f70]">HPOLC</div><div className="hidden text-xs text-[#70859a] sm:block">Hệ thống quản lý đào tạo · Bản xuất Excel 2.3</div></div></div><label className="ml-auto hidden max-w-md flex-1 items-center rounded-xl border border-[#d9e4ee] bg-[#f7fafd] px-3 md:flex"><Search size={17}/><input value={query} onChange={e=>setQuery(e.target.value)} className="w-full bg-transparent px-2.5 py-2 text-sm outline-none" placeholder="Tìm số quyết định..."/></label><button className="rounded-xl border p-2.5"><Settings size={19}/></button><div className="grid h-9 w-9 place-items-center rounded-full bg-[#e4f0fb] text-sm font-bold text-[#0e5cab]">HP</div></div></header>
   <div className="mx-auto grid max-w-[1600px] lg:grid-cols-[230px_1fr]"><aside className="hidden min-h-[calc(100vh-64px)] border-r bg-white p-4 lg:block"><nav className="space-y-1.5"><Nav active icon={<LayoutDashboard/>} text="Tổng quan"/><Nav icon={<UploadCloud/>} text="Nhập dữ liệu"/><Nav icon={<FileText/>} text="Quyết định" badge={String(pdfs.length)}/><Nav icon={<Users/>} text="Sinh viên" badge={String(total)}/><Nav icon={<ShieldCheck/>} text="Đối soát" badge={String(decisions.filter(d=>d.note).length)} warn/><Nav icon={<BarChart3/>} text="Báo cáo"/></nav><div className="mt-8 rounded-2xl bg-[#eef7ff] p-4"><div className="mb-2 flex items-center gap-2 text-sm font-bold text-[#0e5cab]"><Sparkles size={16}/> Chuẩn dữ liệu</div><p className="text-xs leading-5 text-[#617a91]">Đọc nội dung trong quyết định, không suy đoán từ tên tệp.</p></div></aside>
    <main className="min-w-0 p-4 sm:p-6 lg:p-8"><div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-1 text-sm font-bold text-[#0e73b9]">TỔNG HỢP THEO FILE EXCEL MẪU</p><h1 className="text-2xl font-extrabold text-[#173f66] sm:text-3xl">Tổng hợp quản lý đào tạo</h1><p className="mt-1 text-sm text-[#6c8296]">Tự động đọc quyết định và xuất bảng chuẩn A–K</p></div><button onClick={exportExcel} disabled={!template||!decisions.length} className="flex items-center gap-2 rounded-xl bg-[#0e5cab] px-4 py-2.5 text-sm font-bold text-white shadow-lg disabled:opacity-40"><Download size={18}/> Xuất Excel theo mẫu chuẩn</button></div>
     {error&&<div className="mb-4 flex gap-2 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"><AlertTriangle size={18}/>{error}</div>}
