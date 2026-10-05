@@ -43,7 +43,7 @@ async function readPdf(file:File,worker:OcrWorker):Promise<Decision[]>{
  const pdfjs=await import("pdfjs-dist/legacy/build/pdf.mjs");
  pdfjs.GlobalWorkerOptions.workerSrc=new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs",import.meta.url).toString();
  const pdf=await pdfjs.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise;
- let text="",metadataOcr="";const pages:{text:string;groups:Record<string,number>}[]=[];
+ let text="",metadataOcr="";const pages:{text:string;candidates:Record<string,number>[]}[]=[];
  for(let i=1;i<=pdf.numPages;i++){
   const page=await pdf.getPage(i),content=await page.getTextContent();
   let pageText=textFromPdfItems(content.items);
@@ -56,7 +56,8 @@ async function readPdf(file:File,worker:OcrWorker):Promise<Decision[]>{
     if(i>1){const crop=document.createElement("canvas"),cctx=crop.getContext("2d"),x=Math.floor(canvas.width*.54),y=Math.floor(canvas.height*.10),w=canvas.width-x,h=Math.floor(canvas.height*.86);crop.width=w;crop.height=h;if(cctx){cctx.filter="grayscale(1) contrast(1.35)";cctx.drawImage(canvas,x,y,w,h,0,0,w,h);groupText=(await worker.recognize(crop)).data.text}}
    }
   }
-  text+="\n"+pageText;pages.push({text:pageText,groups:groupText?groupCountsLoose(groupText):groupCounts(pageText,null)});
+  const candidates=[groupCountsLoose(pageText),groupCounts(pageText,null)];if(groupText)candidates.unshift(groupCountsLoose(groupText));
+  text+="\n"+pageText;pages.push({text:pageText,candidates});
  }
  const fallback=fromFilename(file.name),digitsText=joinDigits(text),metadataText=joinDigits(metadataOcr||digitsText),header=metadataText.split(/C[aă]n\s+c[ứu]/i)[0],headerNorm=norm(header);
  const headerId=firstMatch(header,[/S[ốo]\s*:\s*(\d+\s*\/\s*QĐ\s*[-–]?\s*ĐHV)/i,/S[ốo]\s*:\s*(\d+\s*\/\s*[A-ZĐ0-9-]+)/i]);
@@ -67,13 +68,14 @@ async function readPdf(file:File,worker:OcrWorker):Promise<Decision[]>{
  const dateRaw=fallback.date||headerDate;
  const date=dateRaw?dateRaw.replace(/\s*th[aá]ng\s*/i,"/").replace(/\s*n[aă]m\s*/i,"/").replace(/[.-]/g,"/").split("/").map((v,i)=>i<2?v.trim().padStart(2,"0"):v.trim()).join("/"):normalizedDate?`${normalizedDate[1].padStart(2,"0")}/${normalizedDate[2].padStart(2,"0")}/${normalizedDate[3]}`:"";
  const article=firstMatch(digitsText,/Đi[ềê]u\s*1[\s\S]{0,220}?[Cc][ôo]ng\s+nh[aậ]n\s+(\d{1,4})\s+th[ií]\s+sinh/i);
- const buckets:{text:string;groups:Record<string,number>}[]=[];for(let i=1;i<pages.length;i++){const p=pages[i],pn=norm(p.text),isStart=fuzzyHas(pn,"danhsachthisinhtrungtuyen",5);if(isStart||!buckets.length)buckets.push({text:p.text,groups:p.groups});else{const last=buckets[buckets.length-1];last.text+=`\n${p.text}`;last.groups=mergeGroups(last.groups,p.groups)}}
- const sections=buckets.length?buckets:[{text:digitsText,groups:groupCounts(digitsText,null)}];
+ const buckets:{text:string;candidates:Record<string,number>[]}[]=[];for(let i=1;i<pages.length;i++){const p=pages[i],pn=norm(p.text),previousEnded=buckets.length>0&&fuzzyHas(norm(buckets[buckets.length-1].text),"andinhdanhsachnay",5),isStart=fuzzyHas(pn,"danhsachthisinhtrungtuyen",5)||previousEnded;if(isStart||!buckets.length)buckets.push({text:p.text,candidates:p.candidates});else{const last=buckets[buckets.length-1];last.text+=`\n${p.text}`;const size=Math.max(last.candidates.length,p.candidates.length);last.candidates=Array.from({length:size},(_,ci)=>mergeGroups(last.candidates[ci]||{},p.candidates[ci]||{}))}}
+ const sections=buckets.length?buckets:[{text:digitsText,candidates:[groupCountsLoose(digitsText),groupCounts(digitsText,null)]}];
  return sections.map((bucket,si)=>{const section=bucket.text;
-  const stated=firstMatch(section,/[ẤA]n\s+đ[iị]nh\s+danh\s+s[aá]ch\s+n[aà]y\s+c[oó]\s+(\d{1,3})\s+ng[ưừ][ờo]i/i),statedNorm=norm(section).match(/andinhdanhsachnay.{0,10}?(\d{1,3})ngu/)?.[1]||"",students=stated?+stated:statedNorm?+statedNorm:(sections.length===1?(fallback.students??(article?+article:null)):null);
+  const stated=firstMatch(section,/[ẤA]n\s+đ[iị]nh\s+danh\s+s[aá]ch\s+n[aà]y\s+c[oó]\s+(\d{1,3})\s+ng[ưừ][ờo]i/i),statedNorm=norm(section).match(/andinhdanhsachnay.{0,10}?(\d{1,3})ngu/)?.[1]||"",statedValues=[stated,statedNorm].filter(Boolean).map(Number),students=statedValues.length?Math.max(...statedValues):(sections.length===1?(fallback.students??(article?+article:null)):null);
   const classLine=firstMatch(section,/[Ll][ớo]p\s+([^\n]{3,180})/i),className=clean(classLine.split(/\.\s*Tr[ưườ]ng/i)[0]).replace(/([A-Z])\s+(?=\d)/g,"$1").replace(/(\d)\s*[.]\s*([A-Z])\s*(\d)/g,"$1.$2$3");
   const stationFromClass=classLine.match(/\.\s*(Tr[ưườ]ng[^\n]+)/i)?.[1]||"",station=firstMatch(section,/(?:C[ơo]\s+s[ởo]\s+ph[ốo]i\s+h[ợo]p|Đ[ơo]n\s+v[iị]\s+li[eê]n\s+k[ếe]t|Tr[aạ]m)\s*:\s*([^\n]{3,180})/i)||stationFromClass;
-  const majorRaw=firstMatch(section,/[Nn]g[aà]nh\s+([^,\n]{2,60})/i),round=file.name.match(/đợt\s*(\d+)/i)?.[1]||firstMatch(section,/[ĐD][ỢO]T\s*(\d+)/i)||"",groups=bucket.groups,sum=Object.values(groups).reduce((a,b)=>a+b,0),noteParts=[];
+  const totals=(g:Record<string,number>)=>Object.values(g).reduce((a,b)=>a+b,0),groups=[...bucket.candidates].sort((a,b)=>students===null?totals(b)-totals(a):Math.abs(totals(a)-students)-Math.abs(totals(b)-students))[0]||{},sum=totals(groups);
+  const majorRaw=firstMatch(section,/[Nn]g[aà]nh\s+([^,\n]{2,60})/i),round=file.name.match(/đợt\s*(\d+)/i)?.[1]||firstMatch(section,/[ĐD][ỢO]T\s*(\d+)/i)||"",noteParts=[];
   if(article&&sections.length===1&&students&&+article!==students)noteParts.push(`Điều 1: ${article} SV; danh sách này: ${students} SV`);
   if(students&&sum!==students)noteParts.push(`OCR chưa khớp: nhận diện ${sum}/${students} SV; không cho xuất đến khi khớp`);
   const isSupplement=fuzzyHas(norm(section),"bosung",2)||fuzzyHas(norm(text),"tuyensinhbosung",3)||/\bbs\b/i.test(file.name);
