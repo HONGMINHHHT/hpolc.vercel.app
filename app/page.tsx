@@ -5,7 +5,7 @@ import * as XLSX from "xlsx";
 
 type Template={name:string,buffer:ArrayBuffer,sheetName:string,headerRow:number,headers:string[]};
 type Decision={file:string,id:string,date:string,type:string,major:string,className:string,station:string,students:number|null,groups:Record<string,number>,note:string};
-type OcrWorker={recognize:(image:HTMLCanvasElement)=>Promise<{data:{text:string}}>;terminate:()=>Promise<unknown>};
+type OcrWorker={recognize:(image:HTMLCanvasElement)=>Promise<{data:{text:string}}>;setParameters:(params:Record<string,string>)=>Promise<unknown>;terminate:()=>Promise<unknown>};
 const MONTHS:Record<string,number>={"ĐH (1)":25,"CĐ (2)":25,"TC (3)":37,"CĐKN (4)":25,"TCKN (5)":37,"THPT (6)":49};
 const GROUP_NAMES=Object.keys(MONTHS),GROUP_COLORS=["#1259a7","#7f8fa6","#12a37f","#f0a32f","#df6b34","#7b5cc7"];
 const clean=(v:unknown)=>String(v??"").replace(/\s+/g," ").trim();
@@ -31,6 +31,13 @@ function groupCountsLoose(text:string){
  if(dh)out["ĐH (1)"]=dh;if(cd)out["CĐ (2)"]=cd;if(tc)out["TC (3)"]=tc;if(cdk)out["CĐKN (4)"]=cdk;if(tck)out["TCKN (5)"]=tck;if(thpt)out["THPT (6)"]=thpt;
  return out;
 }
+function targetColumn(source:HTMLCanvasElement,start=.655,binary=false){
+ const crop=document.createElement("canvas"),ctx=crop.getContext("2d"),x=Math.floor(source.width*start),y=Math.floor(source.height*.145),w=Math.floor(source.width*(.985-start)),h=Math.floor(source.height*.78);crop.width=w;crop.height=h;
+ if(!ctx)return crop;
+ ctx.filter=binary?"grayscale(1) contrast(2.1)":"grayscale(1) contrast(1.55)";ctx.drawImage(source,x,y,w,h,0,0,w,h);ctx.filter="none";
+ if(binary){const image=ctx.getImageData(0,0,w,h),p=image.data;for(let i=0;i<p.length;i+=4){const v=p[i]<188?0:255;p[i]=p[i+1]=p[i+2]=v}ctx.putImageData(image,0,0)}
+ return crop;
+}
 function mergeGroups(a:Record<string,number>,b:Record<string,number>){const out={...a};for(const g of GROUP_NAMES)out[g]=(out[g]||0)+(b[g]||0);return out}
 function fromFilename(file:string){
  const base=file.replace(/\.pdf$/i,"");
@@ -48,15 +55,15 @@ async function readPdf(file:File,worker:OcrWorker):Promise<Decision[]>{
   const page=await pdf.getPage(i),content=await page.getTextContent();
   let pageText=textFromPdfItems(content.items);
   const extractedMeta=norm(joinDigits(pageText)),needsFullOcr=clean(pageText).length<30,needsMetadataOcr=i===1&&(!/so\d{1,5}qd/.test(extractedMeta)||!/ngay\d{1,2}thang\d{1,2}nam\d{4}/.test(extractedMeta));
-  let groupText="";
+  const groupTexts:string[]=[];
   if(needsFullOcr||needsMetadataOcr){
    const viewport=page.getViewport({scale:3}),canvas=document.createElement("canvas"),ctx=canvas.getContext("2d");
    canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
-   if(ctx){await page.render({canvas,canvasContext:ctx,viewport}).promise;const ocrText=(await worker.recognize(canvas)).data.text;if(needsFullOcr)pageText=ocrText;if(i===1)metadataOcr=ocrText;
-    if(i>1){const crop=document.createElement("canvas"),cctx=crop.getContext("2d"),x=Math.floor(canvas.width*.54),y=Math.floor(canvas.height*.10),w=canvas.width-x,h=Math.floor(canvas.height*.86);crop.width=w;crop.height=h;if(cctx){cctx.filter="grayscale(1) contrast(1.35)";cctx.drawImage(canvas,x,y,w,h,0,0,w,h);groupText=(await worker.recognize(crop)).data.text}}
+   if(ctx){await page.render({canvas,canvasContext:ctx,viewport}).promise;await worker.setParameters({tessedit_pageseg_mode:"3",preserve_interword_spaces:"1"});const ocrText=(await worker.recognize(canvas)).data.text;if(needsFullOcr)pageText=ocrText;if(i===1)metadataOcr=ocrText;
+    if(i>1){await worker.setParameters({tessedit_pageseg_mode:"6",preserve_interword_spaces:"1"});for(const crop of [targetColumn(canvas,.655,false),targetColumn(canvas,.69,true)])groupTexts.push((await worker.recognize(crop)).data.text);await worker.setParameters({tessedit_pageseg_mode:"3"})}
    }
   }
-  const candidates=[groupCountsLoose(pageText),groupCounts(pageText,null)];if(groupText)candidates.unshift(groupCountsLoose(groupText));
+  const candidates=[...groupTexts.map(groupCountsLoose),groupCountsLoose(pageText),groupCounts(pageText,null)];
   text+="\n"+pageText;pages.push({text:pageText,candidates});
  }
  const fallback=fromFilename(file.name),digitsText=joinDigits(text),metadataText=joinDigits(metadataOcr||digitsText),header=metadataText.split(/C[aă]n\s+c[ứu]/i)[0],headerNorm=norm(header);
