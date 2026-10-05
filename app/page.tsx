@@ -35,7 +35,7 @@ function mergeGroups(a:Record<string,number>,b:Record<string,number>){const out=
 function fromFilename(file:string){
  const base=file.replace(/\.pdf$/i,"");
  const id=base.match(/(?:QĐ|QD)(?:TT)?\s*\d*[^0-9]{0,3}(\d{2,5})/i)?.[1]||base.match(/\b(\d{3,5})\b/)?.[1]||"";
- const d=base.match(/(\d{1,2})[.\-_](\d{1,2})[.\-_](\d{2,4})/),students=base.match(/\(\s*(\d+)\s*sv/i)?.[1];
+ const d=base.match(/(?<!\d)(\d{1,2})[.\-_](\d{1,2})[.\-_](\d{2,4})(?!\d)/),students=base.match(/\(\s*(\d+)\s*sv/i)?.[1];
  const year=d?(d[3].length===2?`20${d[3]}`:d[3]):"";
  return{id:id?`${id}/QĐ-ĐHV`:"",date:d?`${d[1].padStart(2,"0")}/${d[2].padStart(2,"0")}/${year}`:"",students:students?+students:null,type:/\bbs\b|bổ sung/i.test(file)?"Tuyển bổ sung":"Tuyển mới"}
 }
@@ -53,7 +53,7 @@ async function readPdf(file:File,worker:OcrWorker):Promise<Decision[]>{
    const viewport=page.getViewport({scale:3}),canvas=document.createElement("canvas"),ctx=canvas.getContext("2d");
    canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
    if(ctx){await page.render({canvas,canvasContext:ctx,viewport}).promise;const ocrText=(await worker.recognize(canvas)).data.text;if(needsFullOcr)pageText=ocrText;if(i===1)metadataOcr=ocrText;
-    if(i>1){const crop=document.createElement("canvas"),cctx=crop.getContext("2d"),x=Math.floor(canvas.width*.64),y=Math.floor(canvas.height*.16),w=canvas.width-x,h=Math.floor(canvas.height*.78);crop.width=w;crop.height=h;if(cctx){cctx.drawImage(canvas,x,y,w,h,0,0,w,h);groupText=(await worker.recognize(crop)).data.text}}
+    if(i>1){const crop=document.createElement("canvas"),cctx=crop.getContext("2d"),x=Math.floor(canvas.width*.54),y=Math.floor(canvas.height*.10),w=canvas.width-x,h=Math.floor(canvas.height*.86);crop.width=w;crop.height=h;if(cctx){cctx.filter="grayscale(1) contrast(1.35)";cctx.drawImage(canvas,x,y,w,h,0,0,w,h);groupText=(await worker.recognize(crop)).data.text}}
    }
   }
   text+="\n"+pageText;pages.push({text:pageText,groups:groupText?groupCountsLoose(groupText):groupCounts(pageText,null)});
@@ -70,13 +70,14 @@ async function readPdf(file:File,worker:OcrWorker):Promise<Decision[]>{
  const buckets:{text:string;groups:Record<string,number>}[]=[];for(let i=1;i<pages.length;i++){const p=pages[i],pn=norm(p.text),isStart=fuzzyHas(pn,"danhsachthisinhtrungtuyen",5);if(isStart||!buckets.length)buckets.push({text:p.text,groups:p.groups});else{const last=buckets[buckets.length-1];last.text+=`\n${p.text}`;last.groups=mergeGroups(last.groups,p.groups)}}
  const sections=buckets.length?buckets:[{text:digitsText,groups:groupCounts(digitsText,null)}];
  return sections.map((bucket,si)=>{const section=bucket.text;
-  const stated=firstMatch(section,/[ẤA]n\s+đ[iị]nh\s+danh\s+s[aá]ch\s+n[aà]y\s+c[oó]\s+(\d{1,3})\s+ng[ưừ][ờo]i/i),statedNorm=norm(section).match(/andinhdanhsachnayc[oa06](\d{1,3})ngu/)?.[1]||"",students=stated?+stated:statedNorm?+statedNorm:(sections.length===1?(fallback.students??(article?+article:null)):null);
+  const stated=firstMatch(section,/[ẤA]n\s+đ[iị]nh\s+danh\s+s[aá]ch\s+n[aà]y\s+c[oó]\s+(\d{1,3})\s+ng[ưừ][ờo]i/i),statedNorm=norm(section).match(/andinhdanhsachnay.{0,10}?(\d{1,3})ngu/)?.[1]||"",students=stated?+stated:statedNorm?+statedNorm:(sections.length===1?(fallback.students??(article?+article:null)):null);
   const classLine=firstMatch(section,/[Ll][ớo]p\s+([^\n]{3,180})/i),className=clean(classLine.split(/\.\s*Tr[ưườ]ng/i)[0]).replace(/([A-Z])\s+(?=\d)/g,"$1").replace(/(\d)\s*[.]\s*([A-Z])\s*(\d)/g,"$1.$2$3");
   const stationFromClass=classLine.match(/\.\s*(Tr[ưườ]ng[^\n]+)/i)?.[1]||"",station=firstMatch(section,/(?:C[ơo]\s+s[ởo]\s+ph[ốo]i\s+h[ợo]p|Đ[ơo]n\s+v[iị]\s+li[eê]n\s+k[ếe]t|Tr[aạ]m)\s*:\s*([^\n]{3,180})/i)||stationFromClass;
   const majorRaw=firstMatch(section,/[Nn]g[aà]nh\s+([^,\n]{2,60})/i),round=file.name.match(/đợt\s*(\d+)/i)?.[1]||firstMatch(section,/[ĐD][ỢO]T\s*(\d+)/i)||"",groups=bucket.groups,sum=Object.values(groups).reduce((a,b)=>a+b,0),noteParts=[];
   if(article&&sections.length===1&&students&&+article!==students)noteParts.push(`Điều 1: ${article} SV; danh sách này: ${students} SV`);
   if(students&&sum!==students)noteParts.push(`OCR chưa khớp: nhận diện ${sum}/${students} SV; không cho xuất đến khi khớp`);
-  return{file:sections.length>1?`${file.name} · danh sách ${si+1}`:file.name,id,date,type:/b[ổo]\s*sung/i.test(text)||/\bbs\b/i.test(file.name)?`Tuyển bổ sung${round?` đợt ${round}`:""}`:"Tuyển mới",major:/lu[aậ]t/i.test(majorRaw||section)?"Luật học":clean(majorRaw),className,station:clean(station),students,groups,note:noteParts.join(". ")};
+  const isSupplement=fuzzyHas(norm(section),"bosung",2)||fuzzyHas(norm(text),"tuyensinhbosung",3)||/\bbs\b/i.test(file.name);
+  return{file:sections.length>1?`${file.name} · danh sách ${si+1}`:file.name,id,date,type:isSupplement?`Tuyển bổ sung${round?` đợt ${round}`:""}`:"Tuyển mới",major:/lu[aậ]t/i.test(majorRaw||section)?"Luật học":clean(majorRaw),className,station:clean(station),students,groups,note:noteParts.join(". ")};
  });
 }
 function fieldKey(header:string){const h=norm(header),tests:[string,string[]][]=[["stt",["stt","tt"]],["major",["nganh","chuyennganh"]],["station",["tram","cosophoihop","diemdatlop"]],["className",["lop","malop"]],["decision",["qdtrungtuyen","soquyetdinh","quyetdinh"]],["decisionDate",["ngayquyetdinh","ngaybanhanh"]],["type",["loaituyen","dottuyen"]],["group",["doituong","nhomdoituong"]],["count",["soluong","sosinhvien"]],["graduation",["thoigiantndukien","thoigiandukientotnghiep","dukientotnghiep"]],["note",["ghichu","luuy"]],["source",["tenfilenguon","filenguon","nguon"]]];for(const[key,aliases]of tests)if(aliases.some(a=>h===a||h.includes(a)))return key;return"unknown"}
